@@ -23,8 +23,7 @@ import {
   rpc,
   pk,
   buy_amount,
-  jitofee,
-  sl_rate,
+  jitofee
 } from "./config.js";
 
 const dbURI = "mongodb://127.0.0.1:27017/signalbot";
@@ -57,12 +56,20 @@ const keypair = Keypair.fromSecretKey(bs58.decode(pk));
   client.addEventHandler(async (event) => {
     if (event.message) {
       const result = parseMessage(event.message);
-      console.log("parse result = ", result);
+      console.log("Message Parse Result = ", result);
       if (result == null) return;
       if (result.signal == "buy") {
-        buy(result.token);
+        Console.log(`==============> Buy Signal, Token = ${result.token}`);
+        const startTime = performance.now();
+        await buy(result.token);
+        const endTime = performance.now();
+        Console.log(`==============> Buy End, Token = ${result.token}, ⏰time = ${endTime - startTime} milliseconds`)
       } else if (result.signal == "sell") {
-        sell(result.token);
+        Console.log(`==============> Sell Signal, Token = ${result.token}`);
+        const startTime = performance.now();
+        await sell(result.token);
+        const endTime = performance.now();
+        Console.log(`==============> Sell End, Token = ${result.token}, ⏰time = ${endTime - startTime} milliseconds`);
       }
     }
   });
@@ -106,9 +113,7 @@ function getSubstringBetween(str, start, end) {
 const buy = async (token) => {
   const quoteResponse = await (
     await fetch(
-      `https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${token}&amount=${
-        buy_amount * LAMPORTS_PER_SOL
-      }&slippageBps=5000`
+      `https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${token}&amount=${buy_amount * LAMPORTS_PER_SOL}&slippageBps=5000`
     )
   ).json();
   const { swapTransaction } = await (
@@ -136,20 +141,47 @@ const buy = async (token) => {
     jitofee * LAMPORTS_PER_SOL
   );
   if (result) {
-    console.log("Buy Success. http://solscan.io/tx/" + txSignature);
-    const t = new TokenModel({ address: token });
+    const price = await getTokenPrice(token);
+    console.log(`======>🟩 Buy Success, Token: ${token}, Price: ${price}, Tx: http://solscan.io/tx/${txSignature}`);
+    const t = new TokenModel({ address: token, slPrice: price / 2, buyPrice: price });
     t.save();
   } else {
-    console.log("Buy failed because of network problem");
+    console.log(`=======>🟥 Buy Failed, Token: ${token}`);
   }
 };
 
 const sell = async (token) => {
-  const t = await TokenModal.findOne({ address: token });
-  if (t == null) return;
-  const tokenBalance = await getTokenBalance(keypair.publicKey, token, true);
-  console.log("tokenBalance = ", tokenBalance);
-  if (tokenBalance == 0) return;
+  const t = await TokenModel.findOne({ address: token });
+  if (t == null) {
+    Console.log(`No have, Token: ${token}`);
+    return;
+  }
+
+  // const tokenBalance = await getTokenBalance(keypair.publicKey, token, true);
+  const tokenBalance = await getSPLBalance(connection, new PublicKey(token), keypair.publicKey);
+  console.log(`Balance of Token: ${token} : ${tokenBalance}`);
+
+  if (tokenBalance == 0) {
+    Console.log(`No Balance, Token: ${token}`);
+    await TokenModel.findOneAndDelete({ address: token });
+    return;
+  }
+
+  let sellAmount;
+  if (t.sells == 0) {
+    sellAmount = Math.floor(tokenBalance * 0.4);
+    Console.log('TP1 Hit, 40% Selling...');
+  } else if (t.sells == 1) {
+    sellAmount = Math.floor(tokenBalance * 0.5);
+    Console.log('TP2 Hit, 30% Selling...');
+  } else if (t.sells == 2) {
+    sellAmount = Math.floor(tokenBalance * 0.6);
+    Console.log('TP3 Hit, 20% Selling...');
+  } else {
+    sellAmount = tokenBalance;
+    Console.log('TP4 Hit, 10% Selling...');
+  }
+
   const quoteResponse = await (
     await fetch(
       `https://quote-api.jup.ag/v6/quote?inputMint=${token}&outputMint=So11111111111111111111111111111111111111112&amount=${tokenBalance}&slippageBps=5000`
@@ -173,70 +205,91 @@ const sell = async (token) => {
   transaction.sign([keypair]);
   const txSignature = bs58.encode(transaction.signatures[0]);
   const latestBlockHash = await connection.getLatestBlockhash("processed");
-  let result = await sendBundle(transaction, keypair, latestBlockHash, jitofee);
+  let result = await sendBundle(transaction, keypair, latestBlockHash, jitofee * LAMPORTS_PER_SOL);
   if (result) {
-    console.log("Sell Success. http://solscan.io/tx/" + txSignature);
-    TokenModal.findOneAndDelete({ address: token });
+    console.log(`🟩 Sell Success. Token: ${token}, Tx: http://solscan.io/tx/${txSignature}`);
+    t.sells += 1;
+    t.slPrice = t.buyPrice;
+    t.save();
+  } else {
+    console.log(`🟥 Sell Failed. Token: ${token}`);
   }
 };
 
 const sl_monitor = async () => {
   while (true) {
-    const tokens = await TokenModal.find({});
+    const tokens = await TokenModel.find({});
     for (let i = 0; i < tokens.length; i++) {
-      const tokenBalance = await getTokenBalance(
-        keypair.publicKey,
-        tokens[i].address,
-        true
-      );
-      console.log("sl monitor, tokenBalance = ", tokenBalance);
-      if (tokenBalance == 0) continue;
-      const quoteResponse = await (
-        await fetch(
-          `https://quote-api.jup.ag/v6/quote?inputMint=${tokens[i].address}&outputMint=So11111111111111111111111111111111111111112&amount=${tokenBalance}&slippageBps=5000`
-        )
-      ).json();
+      // const tokenBalance = await getTokenBalance(
+      //   keypair.publicKey,
+      //   tokens[i].address,
+      //   true
+      // );
+      const tokenBalance = await getSPLBalance(connection, new PublicKey(tokens[i].address), keypair.publicKey);
 
-      if (
-        Number(quoteResponse.outAmount) >
-        buy_amount * sl_rate * LAMPORTS_PER_SOL
-      )
-        continue;
+      if (tokenBalance == 0) continue;
+
       (async () => {
-        const { swapTransaction } = await (
-          await fetch("https://quote-api.jup.ag/v6/swap", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              quoteResponse,
-              userPublicKey: keypair.publicKey.toString(),
-              wrapAndUnwrapSol: true,
-            }),
-          })
-        ).json();
-        const swapTransactionBuf = Buffer.from(swapTransaction, "base64");
-        var transaction = VersionedTransaction.deserialize(swapTransactionBuf);
-        transaction.sign([keypair]);
-        const txSignature = bs58.encode(transaction.signatures[0]);
-        const latestBlockHash = await connection.getLatestBlockhash(
-          "processed"
-        );
-        let result = await sendBundle(
-          transaction,
-          keypair,
-          latestBlockHash,
-          jitofee
-        );
-        if (result) {
-          console.log("SL Sell. http://solscan.io/tx/" + txSignature);
-          TokenModal.findOneAndDelete({ address: token });
+        const price = await getTokenPrice(tokens[i].address);
+        if (price < tokens[i].slPrice) {
+          const quoteResponse = await (
+            await fetch(
+              `https://quote-api.jup.ag/v6/quote?inputMint=${tokens[i].address}&outputMint=So11111111111111111111111111111111111111112&amount=${tokenBalance}&slippageBps=5000`
+            )
+          ).json();
+
+          const { swapTransaction } = await (
+            await fetch("https://quote-api.jup.ag/v6/swap", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                quoteResponse,
+                userPublicKey: keypair.publicKey.toString(),
+                wrapAndUnwrapSol: true,
+              }),
+            })
+          ).json();
+
+          const swapTransactionBuf = Buffer.from(swapTransaction, "base64");
+          var transaction = VersionedTransaction.deserialize(swapTransactionBuf);
+          transaction.sign([keypair]);
+          const txSignature = bs58.encode(transaction.signatures[0]);
+          const latestBlockHash = await connection.getLatestBlockhash(
+            "processed"
+          );
+          let result = await sendBundle(
+            transaction,
+            keypair,
+            latestBlockHash,
+            jitofee
+          );
+          if (result) {
+            console.log(`🟨 SL Sell. Token: ${tokens[i].address}, Buy Price:${tokens[i].buyPrice}, Sell Price: ${price}, TP Sells: ${tokens[i].sells} Tx: http://solscan.io/tx/${txSignature}`);
+            TokenModel.findOneAndDelete({ address: tokens[i].address });
+          }
         }
       })();
       await sleep(1000);
     }
   }
+};
+
+const getSPLBalance = async (
+  connection,
+  mintAddress,
+  pubKey,
+  allowOffCurve = false
+) => {
+  try {
+    let ata = getAssociatedTokenAddressSync(mintAddress, pubKey, allowOffCurve);
+    const balance = await connection.getTokenAccountBalance(ata, "processed");
+    return Number(balance.value.amount);
+  } catch (e) {
+    console.log('getSPLBalance error ', e);
+  }
+  return 0;
 };
 
 export const getWalletTokenAccount = async (connection, wallet) => {
@@ -249,6 +302,20 @@ export const getWalletTokenAccount = async (connection, wallet) => {
     accountInfo: SPL_ACCOUNT_LAYOUT.decode(i.account.data),
   }));
 };
+
+const getTokenPrice = async (tokenAddress) => {
+  try {
+    const url = `https://api.jup.ag/price/v2?ids=${tokenAddress}`
+    const resp = await axios.get(url);
+    const priceData = resp.data;
+    const priceKey = Object.keys(priceData.data)[0];
+    const price = priceData.data[priceKey].price;
+    return price;
+  } catch (error) {
+    console.log("getTokenPrice", error)
+    return null;
+  }
+}
 
 export const getTokenBalance = async (wallet, tokenAddress, lamports) => {
   const mint = new PublicKey(tokenAddress);
