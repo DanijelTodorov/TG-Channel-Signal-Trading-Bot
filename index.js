@@ -10,7 +10,7 @@ import {
 } from "@solana/web3.js";
 import axios from "axios";
 import { TokenModel } from "./token.js";
-import { TOKEN_PROGRAM_ID, getMint } from "@solana/spl-token";
+import { TOKEN_PROGRAM_ID, getMint, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { Token, SPL_ACCOUNT_LAYOUT } from "@raydium-io/raydium-sdk";
 
 import mongoose from "mongoose";
@@ -184,7 +184,7 @@ const sell = async (token) => {
 
   const quoteResponse = await (
     await fetch(
-      `https://quote-api.jup.ag/v6/quote?inputMint=${token}&outputMint=So11111111111111111111111111111111111111112&amount=${tokenBalance}&slippageBps=5000`
+      `https://quote-api.jup.ag/v6/quote?inputMint=${token}&outputMint=So11111111111111111111111111111111111111112&amount=${sellAmount}&slippageBps=5000`
     )
   ).json();
   const { swapTransaction } = await (
@@ -263,7 +263,7 @@ const sl_monitor = async () => {
             transaction,
             keypair,
             latestBlockHash,
-            jitofee
+            jitofee * LAMPORTS_PER_SOL
           );
           if (result) {
             console.log(`🟨 SL Sell. Token: ${tokens[i].address}, Buy Price:${tokens[i].buyPrice}, Sell Price: ${price}, TP Sells: ${tokens[i].sells} Tx: http://solscan.io/tx/${txSignature}`);
