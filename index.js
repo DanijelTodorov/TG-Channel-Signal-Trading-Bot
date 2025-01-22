@@ -59,17 +59,17 @@ const keypair = Keypair.fromSecretKey(bs58.decode(pk));
       console.log("Message Parse Result = ", result);
       if (result == null) return;
       if (result.signal == "buy") {
-        Console.log(`==============> Buy Signal, Token = ${result.token}`);
+        console.log(`==============> Buy Signal, Token = ${result.token}`);
         const startTime = performance.now();
         await buy(result.token);
         const endTime = performance.now();
-        Console.log(`==============> Buy End, Token = ${result.token}, ⏰time = ${endTime - startTime} milliseconds`)
+        console.log(`==============> Buy End, Token = ${result.token}, ⏰time = ${endTime - startTime} milliseconds`)
       } else if (result.signal == "sell") {
-        Console.log(`==============> Sell Signal, Token = ${result.token}`);
+        console.log(`==============> Sell Signal, Token = ${result.token}`);
         const startTime = performance.now();
         await sell(result.token);
         const endTime = performance.now();
-        Console.log(`==============> Sell End, Token = ${result.token}, ⏰time = ${endTime - startTime} milliseconds`);
+        console.log(`==============> Sell End, Token = ${result.token}, ⏰time = ${endTime - startTime} milliseconds`);
       }
     }
   });
@@ -153,7 +153,7 @@ const buy = async (token) => {
 const sell = async (token) => {
   const t = await TokenModel.findOne({ address: token });
   if (t == null) {
-    Console.log(`No have, Token: ${token}`);
+    console.log(`No have, Token: ${token}`);
     return;
   }
 
@@ -162,7 +162,7 @@ const sell = async (token) => {
   console.log(`Balance of Token: ${token} : ${tokenBalance}`);
 
   if (tokenBalance == 0) {
-    Console.log(`No Balance, Token: ${token}`);
+    console.log(`No Balance, Token: ${token}`);
     await TokenModel.findOneAndDelete({ address: token });
     return;
   }
@@ -170,16 +170,16 @@ const sell = async (token) => {
   let sellAmount;
   if (t.sells == 0) {
     sellAmount = Math.floor(tokenBalance * 0.4);
-    Console.log('TP1 Hit, 40% Selling...');
+    console.log('TP1 Hit, 40% Selling...');
   } else if (t.sells == 1) {
     sellAmount = Math.floor(tokenBalance * 0.5);
-    Console.log('TP2 Hit, 30% Selling...');
+    console.log('TP2 Hit, 30% Selling...');
   } else if (t.sells == 2) {
     sellAmount = Math.floor(tokenBalance * 0.6);
-    Console.log('TP3 Hit, 20% Selling...');
+    console.log('TP3 Hit, 20% Selling...');
   } else {
     sellAmount = tokenBalance;
-    Console.log('TP4 Hit, 10% Selling...');
+    console.log('TP4 Hit, 10% Selling...');
   }
 
   const quoteResponse = await (
